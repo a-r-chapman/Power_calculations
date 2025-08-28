@@ -1,0 +1,126 @@
+## Power calculation for UKRI MRC CSF
+## A Chapman July 2025
+
+#WP1 
+# Sample size for competing risks modelling study
+# Using approach from https://doi.org/10.1136/bmj.m441
+
+library(pmsampsize)
+pmsampsize(
+        type = "s",
+        csrsquared = 0.15,            # Estimated Cox-Snell R²
+        parameters = 15,            # Number of candidate predictors
+        rate = 0.125,               # Outcome event rate at 1 year
+        timepoint = 1,              # Timepoint in years
+        meanfup = 1,                # Mean follow-up in years
+        shrinkage = 0.9             # Target shrinkage factor
+)
+
+
+#WP2
+# Minimum detectable relative differences in plaque characteristics 
+# Pilot data from https://doi.org/10.1148/ryct.220081 Supplementary Table S2
+# Simulates GLM model (log-link) 
+# the WP1 model covariate is not included as it has not been developed - estimates are conservative
+
+library(dplyr)
+
+set.seed(123) # reproducibility
+
+# --- PARAMETERS ---
+n1 <- 150  # type 1 MI
+n2 <- 150  # type 2 MI
+n <- n1 + n2
+
+alpha <- 0.05
+target_power <- 0.8
+n_sim <- 500  # simulations per step
+
+# 
+simulate_covariates <- function(n){
+        data.frame(
+                age = rnorm(n, mean = 65, sd = 10),
+                sex = rbinom(n, 1, 0.6),
+                creatinine = rnorm(n, mean = 1.0, sd = 0.2)
+        )
+}
+
+# 
+detectable_rel_diff_lognorm <- function(mu_base, sd_base){
+        # Convert pilot mean/sd on original scale to log-scale 
+        sigma2 <- log(1 + (sd_base/mu_base)^2)
+        sigma  <- sqrt(sigma2)
+        mu_log_base <- log(mu_base) - 0.5*sigma2
+        
+        simulate_lm <- function(rel_diff){
+                beta_type2 <- log(1 + rel_diff)  
+                
+                covs1 <- simulate_covariates(n1)
+                covs2 <- simulate_covariates(n2)
+                covs <- bind_rows(covs1, covs2)
+                covs$type2 <- c(rep(0, n1), rep(1, n2))
+                
+                # Linear predictor on the *log* scale
+                eta <- mu_log_base +
+                        beta_type2*covs$type2 +
+                        0.01*covs$age + 0.1*covs$sex + 0.05*covs$creatinine
+                
+                # Simulate log-normal response
+                y_log <- rnorm(n, mean = eta, sd = sigma)
+                y <- exp(y_log)  # plaque %
+                
+                fit <- lm(log(y) ~ type2 + age + sex + creatinine, data = covs)
+                summ <- summary(fit)$coefficients
+                return(summ["type2","Pr(>|t|)"] < alpha)
+        }
+        
+        # Bisection search
+        lower <- 0.01; upper <- 0.5; tolerance <- 0.005
+        repeat {
+                mid <- (lower + upper)/2
+                power_est <- mean(replicate(n_sim, simulate_lm(mid)))
+                if (abs(power_est - target_power) < 0.02 || (upper - lower) < tolerance) break
+                if (power_est < target_power) lower <- mid else upper <- mid
+        }
+        return(mid*100)  # % relative difference
+}
+
+# 
+results_lm <- sapply(plaque_types, function(x) detectable_rel_diff_lognorm(x["mu"], x["sd"]))
+cat("Minimum detectable relative differences (80% power)")
+print(round(results_lm, 1))
+
+
+## WP3 - Minimum detectable difference in angina symptom score (group comparison)
+
+# Assumptions
+n_patients <- 120
+prop_obstructive <- 0.4   # 40% obstructive disease
+n_days <- 80              # repeated daily measures (10% attrition accounted for with 80 days)
+sd_total <- 11            # total SD of angina score - treated as continuous variable in this power calculation
+icc <- 0.3                # within-person correlation
+alpha <- 0.05
+target_power <- 0.8
+
+# --- sample size per patient
+n_eff <- n_days / (1 + (n_days - 1) * icc)
+
+# total sample size across all patients
+n_total_eff <- n_patients * n_eff
+
+# considering estimated 40% obstructive and non-obstructive groups
+n1 <- n_total_eff * prop_obstructive
+n0 <- n_total_eff * (1 - prop_obstructive)
+
+# SE for group difference
+SE_diff <- sqrt(sd_total^2 / n1 + sd_total^2 / n0)
+
+# Z values 
+z_alpha <- qnorm(1 - alpha/2)
+z_power <- qnorm(target_power)
+
+# minimum detectable difference in angina symptom score 
+MDD <- (z_alpha + z_power) * SE_diff
+MDD
+
+
