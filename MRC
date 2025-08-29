@@ -98,7 +98,7 @@ n_patients <- 120
 prop_obstructive <- 0.4   # 40% obstructive disease
 n_days <- 80              # repeated daily measures (10% attrition accounted for with 80 days)
 sd_total <- 11            # total SD of angina score - treated as continuous variable in this power calculation
-icc <- 0.3                # within-person correlation
+icc <- 0.2                # within-person correlation
 alpha <- 0.05
 target_power <- 0.8
 
